@@ -1,4 +1,3 @@
-const API_BASE = "http://localhost:8000";
 const PROCESSING_DELAY_MS = 800;
 
 const fileInput = document.getElementById("fileInput");
@@ -28,6 +27,10 @@ let selectedFile = null;
 let currentDocId = "";
 let currentFilename = "";
 let typingIndicator = null;
+
+function apiUrl(path) {
+  return new URL(path, window.location.href).toString();
+}
 
 function showError(message) {
   errorBox.textContent = `ERROR: ${message}`;
@@ -150,7 +153,7 @@ async function processDocument() {
 
   try {
     const animationPromise = animateSteps();
-    const response = await fetch(`${API_BASE}/upload`, {
+    const response = await fetch(apiUrl("upload"), {
       method: "POST",
       body: formData,
     });
@@ -234,7 +237,7 @@ function hideTyping() {
 
 async function clearChatSession() {
   try {
-    await fetch(`${API_BASE}/new-chat`, {
+    await fetch(apiUrl("new-chat"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -276,7 +279,7 @@ async function submitQuestion(event) {
   showTyping();
 
   try {
-    const response = await fetch(`${API_BASE}/query`, {
+    const response = await fetch(apiUrl("query"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
