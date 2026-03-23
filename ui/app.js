@@ -3,6 +3,8 @@ const PROCESSING_DELAY_MS = 800;
 const fileInput = document.getElementById("fileInput");
 const dropZone = document.getElementById("dropZone");
 const fileName = document.getElementById("fileName");
+const modelSelect = document.getElementById("modelSelect");
+const modelStatus = document.getElementById("modelStatus");
 const processBtn = document.getElementById("processBtn");
 const processingSteps = document.getElementById("processingSteps");
 const errorBox = document.getElementById("errorBox");
@@ -26,6 +28,7 @@ const closeChatBtn = document.getElementById("closeChatBtn");
 let selectedFile = null;
 let currentDocId = "";
 let currentFilename = "";
+let currentModelName = "";
 let typingIndicator = null;
 
 function apiUrl(path) {
@@ -40,6 +43,71 @@ function showError(message) {
 function clearError() {
   errorBox.textContent = "";
   errorBox.classList.add("hidden");
+}
+
+function setModelStatus(message) {
+  modelStatus.textContent = message;
+}
+
+function getSelectedModel() {
+  return modelSelect.value || currentModelName;
+}
+
+function populateModelOptions(models, defaultModel) {
+  modelSelect.innerHTML = "";
+
+  if (!Array.isArray(models) || !models.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "NO LOCAL MODELS FOUND";
+    modelSelect.appendChild(option);
+    modelSelect.disabled = true;
+    currentModelName = "";
+    setModelStatus("No local Ollama chat models are available.");
+    return;
+  }
+
+  models.forEach((model) => {
+    const option = document.createElement("option");
+    option.value = model.name;
+    option.textContent = model.label || model.name;
+    modelSelect.appendChild(option);
+  });
+
+  const preferredModel =
+    models.find((model) => model.name === currentModelName)?.name ||
+    models.find((model) => model.name === defaultModel)?.name ||
+    models[0].name;
+
+  modelSelect.value = preferredModel;
+  modelSelect.disabled = false;
+  currentModelName = preferredModel;
+  setModelStatus(`Using local model: ${preferredModel}`);
+}
+
+async function loadModels() {
+  modelSelect.disabled = true;
+  setModelStatus("Checking Ollama for available local models...");
+
+  try {
+    const response = await fetch(apiUrl("models"));
+    const data = await readResponse(response);
+    if (!response.ok) {
+      throw new Error(data.detail || "Unable to load local models.");
+    }
+
+    populateModelOptions(data.models, data.default_model);
+  } catch (error) {
+    modelSelect.innerHTML = "";
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "MODEL LOAD FAILED";
+    modelSelect.appendChild(option);
+    modelSelect.disabled = true;
+    currentModelName = "";
+    setModelStatus(error.message || "Unable to load local models.");
+    showError(error.message || "Unable to load local models.");
+  }
 }
 
 function setSelectedFile(file) {
@@ -143,9 +211,14 @@ async function processDocument() {
     showError("Please choose a PDF or TXT file.");
     return;
   }
+  if (!getSelectedModel()) {
+    showError("Please wait for local models to load.");
+    return;
+  }
 
   const formData = new FormData();
   formData.append("file", selectedFile);
+  formData.append("model_name", getSelectedModel());
 
   processBtn.disabled = true;
   processBtn.textContent = "PROCESSING...";
@@ -166,6 +239,11 @@ async function processDocument() {
 
     finishSteps();
     currentDocId = data.doc_id || "";
+    currentModelName = data.model_name || getSelectedModel();
+    if (currentModelName) {
+      modelSelect.value = currentModelName;
+      setModelStatus(`Using local model: ${currentModelName}`);
+    }
     renderResults(data);
     showResults();
   } catch (error) {
@@ -256,7 +334,10 @@ async function openChatOverlay() {
   chatFilename.textContent = currentFilename || "DOCUMENT";
   chatOverlay.classList.remove("hidden");
   chatOverlay.setAttribute("aria-hidden", "false");
-  appendMessage("assistant", "READR here. I can summarize, extract details, and surface insights from this document. Ask me anything.");
+  appendMessage(
+    "assistant",
+    `READR here. I can summarize, extract details, and surface insights from this document. Current model: ${getSelectedModel() || "default"}. Ask me anything.`,
+  );
   chatInput.focus();
 }
 
@@ -287,6 +368,7 @@ async function submitQuestion(event) {
       body: JSON.stringify({
         doc_id: currentDocId,
         question,
+        model_name: getSelectedModel(),
       }),
     });
     const data = await readResponse(response);
@@ -340,5 +422,12 @@ newDocumentBtn.addEventListener("click", resetAppState);
 openChatBtn.addEventListener("click", openChatOverlay);
 closeChatBtn.addEventListener("click", closeChatOverlay);
 chatForm.addEventListener("submit", submitQuestion);
+modelSelect.addEventListener("change", () => {
+  currentModelName = modelSelect.value;
+  if (currentModelName) {
+    setModelStatus(`Using local model: ${currentModelName}`);
+  }
+});
 
+loadModels();
 resetAppState();

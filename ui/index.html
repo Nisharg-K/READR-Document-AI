@@ -16,12 +16,12 @@
     <div class="background-layer" aria-hidden="true">
       <div class="dot-grid"></div>
       <div class="watermark-strip">
-        <span>READR</span>
-        <span>READR</span>
-        <span>READR</span>
-        <span>READR</span>
-        <span>READR</span>
-        <span>READR</span>
+        <span>READR. READR.</span>
+        <span>READR. READR.</span>
+        <span>READR. READR.</span>
+        <span>READR. READR.</span>
+        <span>READR. READR.</span>
+        <span>READR. READR.</span>
       </div>
     </div>
 
@@ -52,6 +52,13 @@
             <p id="fileName" class="drop-filename">NO FILE SELECTED</p>
           </div>
         </div>
+        <section class="model-panel" aria-label="Model selection">
+          <label class="model-label" for="modelSelect">MODEL</label>
+          <select id="modelSelect" class="model-select">
+            <option value="">LOADING LOCAL MODELS...</option>
+          </select>
+          <p id="modelStatus" class="model-status">Checking Ollama for available local models...</p>
+        </section>
         <button id="processBtn" class="brutal-button process-button" type="button">
           PROCESS DOCUMENT
         </button>

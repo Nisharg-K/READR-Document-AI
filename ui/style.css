@@ -207,6 +207,39 @@ input {
   overflow-wrap: anywhere;
 }
 
+.model-panel {
+  width: min(60vw, 860px);
+  border: var(--border);
+  box-shadow: var(--shadow);
+  background: var(--white);
+  padding: 16px 18px;
+  display: grid;
+  gap: 10px;
+}
+
+.model-label {
+  font-family: "Space Mono", monospace;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.model-select {
+  width: 100%;
+  border: var(--border);
+  background: var(--yellow);
+  color: var(--black);
+  padding: 14px 16px;
+  box-shadow: 4px 4px 0px var(--black);
+  appearance: none;
+}
+
+.model-status {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
 .brutal-button {
   border: var(--border);
   box-shadow: 6px 6px 0px var(--yellow);
@@ -606,6 +639,7 @@ input {
   }
 
   .drop-zone,
+  .model-panel,
   .process-button,
   .processing-steps,
   .error-box {
