@@ -1,9 +1,3 @@
-# READR - AI Document Processing & Insight Extractor
-# Run: python server.py
-# Requires: ollama pull llama3.1:8b-instruct-q4_K_M
-#           ollama pull nomic-embed-text
-# Architecture: FastAPI + Ollama + ChromaDB
-# RAG Pipeline: PDF -> chunk -> embed -> ChromaDB -> retrieve -> LLM
 
 from __future__ import annotations
 
