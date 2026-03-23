@@ -11,7 +11,7 @@ import chromadb
 import fitz
 import ollama
 import uvicorn
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 MODEL_NAME = "llama3.1:8b-instruct-q4_K_M"
 EMBED_MODEL = "nomic-embed-text"
+OCR_MODEL = "qwen3-vl:8b"
 BASE_DIR = Path(__file__).resolve().parent
 UI_DIR = BASE_DIR.parent / "ui"
 CHUNK_SIZE = 1200
@@ -26,7 +27,13 @@ CHUNK_OVERLAP = 150
 MIN_EXTRACTED_TEXT_LENGTH = 50
 SUMMARY_CONTEXT_CHARS = 12000
 TOP_K = 5
+OCR_RENDER_ZOOM = 1.5
+MODEL_KEEP_ALIVE = "30m"
+SUMMARY_OPTIONS = {"temperature": 0, "num_ctx": 4096, "num_predict": 400}
+ANSWER_OPTIONS = {"temperature": 0, "num_ctx": 2048, "num_predict": 250}
+OCR_OPTIONS = {"temperature": 0, "num_ctx": 1024, "num_predict": 1800}
 EXHAUSTIVE_QUERY_TERMS = {"first", "last", "all", "every", "list", "which semester", "compare"}
+EMBED_MODEL_KEYWORDS = ("embed", "embedding", "bert")
 
 CHAT_HISTORY: dict[str, list[dict[str, str]]] = {}
 
@@ -49,10 +56,77 @@ app.add_middleware(
 class QueryRequest(BaseModel):
     doc_id: str
     question: str
+    model_name: str | None = None
 
 
 class NewChatRequest(BaseModel):
     session_id: str = "default"
+
+
+def model_response_items() -> list[Any]:
+    response = ollama.list()
+    if hasattr(response, "models"):
+        return list(response.models)
+    if isinstance(response, dict):
+        return list(response.get("models", []))
+    return []
+
+
+def get_item_value(item: Any, key: str, default: Any = None) -> Any:
+    if isinstance(item, dict):
+        return item.get(key, default)
+    return getattr(item, key, default)
+
+
+def is_embedding_model(model_name: str, families: list[str]) -> bool:
+    haystack = " ".join([model_name.lower(), *[family.lower() for family in families]])
+    return any(keyword in haystack for keyword in EMBED_MODEL_KEYWORDS)
+
+
+def list_local_chat_models() -> list[dict[str, str]]:
+    models: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    for item in model_response_items():
+        name = str(get_item_value(item, "model", "")).strip()
+        if not name or name in seen:
+            continue
+
+        details = get_item_value(item, "details", {})
+        family = str(get_item_value(details, "family", "")).strip()
+        families = get_item_value(details, "families", []) or []
+        families = [str(value).strip() for value in families if str(value).strip()]
+        parameter_size = str(get_item_value(details, "parameter_size", "")).strip()
+
+        if is_embedding_model(name, [family, *families]):
+            continue
+
+        label = name
+        if parameter_size:
+            label = f"{name} ({parameter_size})"
+
+        seen.add(name)
+        models.append(
+            {
+                "name": name,
+                "label": label,
+                "family": family or (families[0] if families else ""),
+            }
+        )
+
+    return models
+
+
+def resolve_chat_model(requested_model: str | None) -> str:
+    available_models = list_local_chat_models()
+    available_names = {item["name"] for item in available_models}
+    if requested_model and requested_model in available_names:
+        return requested_model
+    if MODEL_NAME in available_names:
+        return MODEL_NAME
+    if available_models:
+        return available_models[0]["name"]
+    raise HTTPException(status_code=500, detail="No local Ollama chat models are available.")
 
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
@@ -62,6 +136,54 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
     except Exception as exc:  # pragma: no cover - defensive
         raise HTTPException(status_code=400, detail=f"Failed to read PDF: {exc}") from exc
     return "\n".join(pages).strip()
+
+
+def render_pdf_page_as_png(page: fitz.Page) -> bytes:
+    pixmap = page.get_pixmap(matrix=fitz.Matrix(OCR_RENDER_ZOOM, OCR_RENDER_ZOOM), alpha=False)
+    return pixmap.tobytes("png")
+
+
+def extract_text_from_scanned_pdf(file_bytes: bytes) -> str:
+    try:
+        with fitz.open(stream=file_bytes, filetype="pdf") as document:
+            page_texts: list[str] = []
+            for page_number, page in enumerate(document, start=1):
+                image_bytes = render_pdf_page_as_png(page)
+                response = ollama.chat(
+                    model=OCR_MODEL,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are an OCR engine. Extract all readable text from the page image. "
+                                "Return plain text only. Preserve line breaks when helpful. "
+                                "Do not summarize, explain, or add commentary."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": "Extract the document text from this page image.",
+                            "images": [image_bytes],
+                        },
+                    ],
+                    options=OCR_OPTIONS,
+                    keep_alive=MODEL_KEEP_ALIVE,
+                )
+                page_text = response.get("message", {}).get("content", "").strip()
+                if page_text:
+                    page_texts.append(f"--- Page {page_number} ---\n{page_text}")
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - depends on local Ollama availability
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Failed to OCR scanned PDF with {OCR_MODEL}. "
+                "Make sure Ollama is running and the vision model is installed."
+            ),
+        ) from exc
+
+    return "\n\n".join(page_texts).strip()
 
 
 def extract_text(filename: str, file_bytes: bytes) -> str:
@@ -76,12 +198,16 @@ def extract_text(filename: str, file_bytes: bytes) -> str:
         raise HTTPException(status_code=400, detail="Only PDF and TXT files are supported.")
 
     text = extract_text_from_pdf(file_bytes)
-    if len(text) < MIN_EXTRACTED_TEXT_LENGTH:
+    if len(text) >= MIN_EXTRACTED_TEXT_LENGTH:
+        return text
+
+    ocr_text = extract_text_from_scanned_pdf(file_bytes)
+    if len(ocr_text) < MIN_EXTRACTED_TEXT_LENGTH:
         raise HTTPException(
             status_code=400,
-            detail="Scanned PDF detected. Only text-based PDFs supported.",
+            detail="Could not extract enough text from the scanned PDF.",
         )
-    return text
+    return ocr_text
 
 
 def normalize_whitespace(text: str) -> str:
@@ -171,7 +297,7 @@ def embed_text(text: str) -> list[float]:
     return embeddings[0] if embeddings else []
 
 
-def call_ollama_json(document_text: str) -> dict[str, Any]:
+def call_ollama_json(document_text: str, model_name: str) -> dict[str, Any]:
     prompt = f"""
 Analyze the document below and return valid JSON with exactly this structure:
 {{
@@ -198,7 +324,7 @@ Document:
 
     try:
         response = ollama.chat(
-            model=MODEL_NAME,
+            model=model_name,
             format="json",
             messages=[
                 {
@@ -207,6 +333,8 @@ Document:
                 },
                 {"role": "user", "content": prompt},
             ],
+            options=SUMMARY_OPTIONS,
+            keep_alive=MODEL_KEEP_ALIVE,
         )
     except Exception as exc:  # pragma: no cover - depends on local Ollama availability
         raise HTTPException(
@@ -411,7 +539,7 @@ def merge_analysis_with_fallback(analysis: dict[str, Any], document_text: str) -
     }
 
 
-def call_ollama_answer(question: str, context: str) -> str:
+def call_ollama_answer(question: str, context: str, model_name: str) -> str:
     system_prompt = (
         "You are READR, a document assistant.\n"
         "Answer ONLY from the context provided.\n"
@@ -423,7 +551,7 @@ def call_ollama_answer(question: str, context: str) -> str:
     )
     try:
         response = ollama.chat(
-            model=MODEL_NAME,
+            model=model_name,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {
@@ -431,6 +559,8 @@ def call_ollama_answer(question: str, context: str) -> str:
                     "content": f"Context:\n{context}\n\nQuestion:\n{question}",
                 },
             ],
+            options=ANSWER_OPTIONS,
+            keep_alive=MODEL_KEEP_ALIVE,
         )
     except Exception as exc:  # pragma: no cover - depends on local Ollama availability
         raise HTTPException(
@@ -514,10 +644,14 @@ def retrieve_context(doc_id: str, question: str) -> str:
 
 
 @app.post("/upload")
-async def upload_document(file: UploadFile = File(...)) -> dict[str, Any]:
+async def upload_document(
+    file: UploadFile = File(...),
+    model_name: str | None = Form(default=None),
+) -> dict[str, Any]:
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing file name.")
 
+    selected_model = resolve_chat_model(model_name)
     file_bytes = await file.read()
     document_text = extract_text(file.filename, file_bytes)
     if not document_text:
@@ -532,7 +666,7 @@ async def upload_document(file: UploadFile = File(...)) -> dict[str, Any]:
 
     doc_id = str(uuid4())
     store_document(doc_id, chunks)
-    analysis = merge_analysis_with_fallback(call_ollama_json(document_text), document_text)
+    analysis = merge_analysis_with_fallback(call_ollama_json(document_text, selected_model), document_text)
 
     entities = analysis.get("entities", {})
     return {
@@ -547,6 +681,7 @@ async def upload_document(file: UploadFile = File(...)) -> dict[str, Any]:
         "insights": analysis.get("insights", []),
         "word_count": len(document_text.split()),
         "chunk_count": len(chunks),
+        "model_name": selected_model,
     }
 
 
@@ -554,6 +689,7 @@ async def upload_document(file: UploadFile = File(...)) -> dict[str, Any]:
 async def query_document(payload: QueryRequest) -> dict[str, str]:
     question = payload.question.strip()
     doc_id = payload.doc_id.strip()
+    selected_model = resolve_chat_model(payload.model_name)
     if not doc_id:
         raise HTTPException(status_code=400, detail="doc_id is required.")
     if not question:
@@ -564,7 +700,7 @@ async def query_document(payload: QueryRequest) -> dict[str, str]:
         raise HTTPException(status_code=404, detail="Document not found.")
 
     context = retrieve_context(doc_id, question)
-    answer = "Not found in document." if not context else call_ollama_answer(question, context)
+    answer = "Not found in document." if not context else call_ollama_answer(question, context, selected_model)
     return {"answer": answer}
 
 
@@ -578,6 +714,16 @@ async def new_chat(payload: NewChatRequest | None = None) -> dict[str, str]:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/models")
+async def get_models() -> dict[str, Any]:
+    models = list_local_chat_models()
+    return {
+        "models": models,
+        "default_model": resolve_chat_model(None),
+        "ocr_model": OCR_MODEL,
+    }
 
 
 app.mount("/", StaticFiles(directory=UI_DIR, html=True), name="ui")
