@@ -107,7 +107,7 @@ Split into chunks
     ↓
 Embed chunks (nomic-embed-text)
     ↓
-Store in ChromaDB
+Store in ChromaDB(Vector DB)
     ↓
 Generate summary, entities, insights (LLaMA)
 ```
