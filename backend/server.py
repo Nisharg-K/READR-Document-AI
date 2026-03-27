@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import socket
+from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from uuid import uuid4
 
@@ -34,8 +38,18 @@ ANSWER_OPTIONS = {"temperature": 0, "num_ctx": 2048, "num_predict": 250}
 OCR_OPTIONS = {"temperature": 0, "num_ctx": 1024, "num_predict": 1800}
 EXHAUSTIVE_QUERY_TERMS = {"first", "last", "all", "every", "list", "which semester", "compare"}
 EMBED_MODEL_KEYWORDS = ("embed", "embedding", "bert")
+SERVER_HOST = os.getenv("READR_HOST", "0.0.0.0")
+SERVER_PORT = int(os.getenv("READR_PORT", "8000"))
+SERVER_NAME = os.getenv("READR_SERVER_NAME", socket.gethostname())
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("READR_ALLOWED_ORIGINS", "*").split(",")
+    if origin.strip()
+]
 
 CHAT_HISTORY: dict[str, list[dict[str, str]]] = {}
+CONNECTED_DEVICES: dict[str, dict[str, str]] = {}
+STATE_LOCK = Lock()
 
 chroma_client = chromadb.PersistentClient(path=str(BASE_DIR / "chroma_db"))
 collection = chroma_client.get_or_create_collection(
@@ -46,8 +60,8 @@ collection = chroma_client.get_or_create_collection(
 app = FastAPI(title="READR")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS or ["*"],
+    allow_credentials=ALLOWED_ORIGINS != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -57,10 +71,73 @@ class QueryRequest(BaseModel):
     doc_id: str
     question: str
     model_name: str | None = None
+    session_id: str = "default"
+    device_id: str | None = None
 
 
 class NewChatRequest(BaseModel):
     session_id: str = "default"
+    device_id: str | None = None
+
+
+class DeviceConnectRequest(BaseModel):
+    device_name: str | None = None
+    device_type: str | None = None
+    device_id: str | None = None
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def build_session_key(session_id: str, device_id: str | None = None) -> str:
+    session = session_id.strip() or "default"
+    if device_id and device_id.strip():
+        return f"{device_id.strip()}::{session}"
+    return session
+
+
+def local_ip_addresses() -> list[str]:
+    addresses = {"127.0.0.1"}
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, family=socket.AF_INET):
+            ip_address = info[4][0]
+            if ip_address and not ip_address.startswith("127."):
+                addresses.add(ip_address)
+    except OSError:
+        pass
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            ip_address = sock.getsockname()[0]
+            if ip_address:
+                addresses.add(ip_address)
+    except OSError:
+        pass
+
+    return sorted(addresses)
+
+
+def server_urls() -> list[str]:
+    host = SERVER_HOST.strip()
+    if host in {"0.0.0.0", "::"}:
+        return [f"http://{ip}:{SERVER_PORT}" for ip in local_ip_addresses()]
+    return [f"http://{host}:{SERVER_PORT}"]
+
+
+def upsert_device(device_name: str | None, device_type: str | None, device_id: str | None = None) -> dict[str, str]:
+    resolved_device_id = device_id.strip() if device_id and device_id.strip() else str(uuid4())
+    device_record = {
+        "device_id": resolved_device_id,
+        "device_name": (device_name or "Unnamed device").strip() or "Unnamed device",
+        "device_type": (device_type or "unknown").strip() or "unknown",
+        "last_seen": utc_now_iso(),
+    }
+    with STATE_LOCK:
+        CONNECTED_DEVICES[resolved_device_id] = device_record
+    return device_record
 
 
 def model_response_items() -> list[Any]:
@@ -740,10 +817,11 @@ async def upload_document(
 
 
 @app.post("/query")
-async def query_document(payload: QueryRequest) -> dict[str, str]:
+async def query_document(payload: QueryRequest) -> dict[str, Any]:
     question = payload.question.strip()
     doc_id = payload.doc_id.strip()
     selected_model = resolve_chat_model(payload.model_name)
+    session_key = build_session_key(payload.session_id, payload.device_id)
     if not doc_id:
         raise HTTPException(status_code=400, detail="doc_id is required.")
     if not question:
@@ -755,14 +833,42 @@ async def query_document(payload: QueryRequest) -> dict[str, str]:
 
     context = retrieve_context(doc_id, question)
     answer = "Not found in document." if not context else call_ollama_answer(question, context, selected_model)
-    return {"answer": answer}
+    with STATE_LOCK:
+        history = CHAT_HISTORY.setdefault(session_key, [])
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": answer})
+    if payload.device_id:
+        upsert_device(None, None, payload.device_id)
+    return {"answer": answer, "session_id": payload.session_id, "device_id": payload.device_id or ""}
 
 
 @app.post("/new-chat")
-async def new_chat(payload: NewChatRequest | None = None) -> dict[str, str]:
+async def new_chat(payload: NewChatRequest | None = None) -> dict[str, Any]:
     session_id = payload.session_id if payload else "default"
-    CHAT_HISTORY[session_id] = []
-    return {"status": "cleared"}
+    device_id = payload.device_id if payload else None
+    session_key = build_session_key(session_id, device_id)
+    with STATE_LOCK:
+        CHAT_HISTORY[session_key] = []
+    if device_id:
+        upsert_device(None, None, device_id)
+    return {"status": "cleared", "session_id": session_id, "device_id": device_id or ""}
+
+
+@app.post("/connect-device")
+async def connect_device(payload: DeviceConnectRequest | None = None) -> dict[str, Any]:
+    device = upsert_device(
+        payload.device_name if payload else None,
+        payload.device_type if payload else None,
+        payload.device_id if payload else None,
+    )
+    with STATE_LOCK:
+        connected_devices = len(CONNECTED_DEVICES)
+    return {
+        "device": device,
+        "server_name": SERVER_NAME,
+        "urls": server_urls(),
+        "connected_devices": connected_devices,
+    }
 
 
 @app.get("/health")
@@ -780,8 +886,22 @@ async def get_models() -> dict[str, Any]:
     }
 
 
+@app.get("/server-info")
+async def get_server_info() -> dict[str, Any]:
+    with STATE_LOCK:
+        devices = list(CONNECTED_DEVICES.values())
+    return {
+        "server_name": SERVER_NAME,
+        "host": SERVER_HOST,
+        "port": SERVER_PORT,
+        "urls": server_urls(),
+        "connected_devices": len(devices),
+        "devices": devices,
+    }
+
+
 app.mount("/", StaticFiles(directory=UI_DIR, html=True), name="ui")
 
 
 if __name__ == "__main__":
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("server:app", host=SERVER_HOST, port=SERVER_PORT, reload=True)
