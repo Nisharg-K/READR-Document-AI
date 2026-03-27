@@ -63,6 +63,29 @@ python server.py
 http://localhost:8000
 ```
 
+To use READR from other devices on the same network, start the server on all interfaces:
+```bash
+set READR_HOST=0.0.0.0
+python server.py
+```
+
+Then open one of the URLs returned by:
+```bash
+curl http://localhost:8000/server-info
+```
+
+Example:
+```
+http://192.168.1.25:8000
+```
+
+Optional environment variables:
+```bash
+set READR_PORT=8000
+set READR_SERVER_NAME=READR-HOST
+set READR_ALLOWED_ORIGINS=http://192.168.1.50:8000,http://192.168.1.51:8000
+```
+
 ---
 
 ## Requirements
@@ -134,5 +157,7 @@ Answer grounded in document
 | POST | /upload | Upload PDF or TXT, returns summary, entities, insights |
 | POST | /query | Ask a question, returns answer from document |
 | POST | /new-chat | Clear chat history |
+| POST | /connect-device | Register a device and return reachable server URLs |
 | GET | /health | Server status |
+| GET | /server-info | Return LAN URLs and currently connected devices |
 
