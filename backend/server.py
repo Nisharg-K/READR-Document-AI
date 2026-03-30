@@ -239,6 +239,24 @@ def split_large_paragraph(paragraph: str, max_size: int, overlap: int) -> list[s
     return chunks
 
 
+def embed_texts(texts: list[str]) -> list[list[float]]:
+    if not texts:
+        return []
+    try:
+        response = ollama.embed(model=EMBED_MODEL, input=texts)
+    except Exception as exc:  # pragma: no cover - depends on local Ollama availability
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Failed to generate embeddings with nomic-embed-text. "
+                "Make sure Ollama is running and the model is installed."
+            ),
+        ) from exc
+    embeddings = response.get("embeddings", [])
+    if len(embeddings) != len(texts):
+        raise HTTPException(status_code=500, detail="Embedding model returned invalid vectors.")
+    return embeddings
+
 def semantic_chunk(text: str, max_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
     normalized = normalize_whitespace(text)
     paragraphs = [part.strip() for part in normalized.split("\n\n") if part.strip()]
@@ -273,23 +291,7 @@ def semantic_chunk(text: str, max_size: int = CHUNK_SIZE, overlap: int = CHUNK_O
     return chunks
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
-    if not texts:
-        return []
-    try:
-        response = ollama.embed(model=EMBED_MODEL, input=texts)
-    except Exception as exc:  # pragma: no cover - depends on local Ollama availability
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Failed to generate embeddings with nomic-embed-text. "
-                "Make sure Ollama is running and the model is installed."
-            ),
-        ) from exc
-    embeddings = response.get("embeddings", [])
-    if len(embeddings) != len(texts):
-        raise HTTPException(status_code=500, detail="Embedding model returned invalid vectors.")
-    return embeddings
+
 
 
 def embed_text(text: str) -> list[float]:
