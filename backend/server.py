@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 
-MODEL_NAME = "llama3.1:8b-instruct-q4_K_M"
+MODEL_NAME = "phi3:medium"
 EMBED_MODEL = "nomic-embed-text"
 OCR_MODEL = "qwen3-vl:8b"
 BASE_DIR = Path(__file__).resolve().parent
@@ -29,8 +29,8 @@ SUMMARY_CONTEXT_CHARS = 12000
 TOP_K = 5
 OCR_RENDER_ZOOM = 1.5
 MODEL_KEEP_ALIVE = "30m"
-SUMMARY_OPTIONS = {"temperature": 0, "num_ctx": 4096, "num_predict": 400}
-ANSWER_OPTIONS = {"temperature": 0, "num_ctx": 2048, "num_predict": 250}
+SUMMARY_OPTIONS = {"temperature": 0, "num_ctx": 4096, "num_predict": 300}
+ANSWER_OPTIONS = {"temperature": 0, "num_ctx": 2048, "num_predict": 200}
 OCR_OPTIONS = {"temperature": 0, "num_ctx": 1024, "num_predict": 1800}
 EXHAUSTIVE_QUERY_TERMS = {"first", "last", "all", "every", "list", "which semester", "compare"}
 EMBED_MODEL_KEYWORDS = ("embed", "embedding", "bert")
@@ -383,20 +383,41 @@ Document:
     parsed = parse_json_object(raw_content)
     return normalize_analysis(parsed)
 
+def parse_json_object(raw_content: str) -> dict[str, Any] | None:
+    import json
+    import re
 
-def parse_json_object(raw_content: str) -> dict[str, Any]:
+    if not raw_content:
+        return None
+
     content = raw_content.strip()
+
+    # ✅ 1. Direct JSON parsing
     try:
         return json.loads(content)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", content, re.DOTALL)
-        if not match:
-            raise HTTPException(status_code=500, detail="Model returned invalid JSON.")
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=500, detail="Model returned invalid JSON.") from exc
+    except Exception:
+        pass
 
+    # ✅ 2. Extract JSON block from text (handles extra text from LLM)
+    match = re.search(r"\{.*\}", content, re.DOTALL)
+    if match:
+        json_str = match.group(0)
+        try:
+            return json.loads(json_str)
+        except Exception:
+            pass
+
+    # ✅ 3. Try fixing common issues (optional robustness)
+    try:
+        cleaned = content.replace("\n", " ").replace("\t", " ")
+        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+    except Exception:
+        pass
+
+    # ✅ FINAL → return None (so fallback logic runs)
+    return None
 
 def as_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):

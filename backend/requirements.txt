@@ -5,3 +5,8 @@ pymupdf
 python-multipart
 chromadb
 rank_bm25
+langchain
+langchain-ollama
+langchain-community
+langchain-core
+langsmith
