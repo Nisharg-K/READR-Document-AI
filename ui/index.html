@@ -71,8 +71,22 @@
       </section>
 
       <section id="resultsScreen" class="screen screen-results hidden">
-        <div class="results-grid">
-          <article class="result-card">
+        <div class="split-layout">
+          <!--left-->
+          <div class="doc-viewer" id="docViewer">
+            <div class="doc-header">
+              <span id="docTitle">DOCUMENT</span>
+              <button id="closeDocBtn" class="doc-close-btn" type="button" title="Close document viewer">✕</button>
+            </div>
+            <div id="docContent" class="doc-content">
+              <iframe id="docFrame" class="doc-frame"></iframe>
+              <pre id="docPreview" class="doc-preview hidden"></pre>
+            </div>
+          </div>
+          <!--right-->
+          <div class="right-panel">
+            <div class = "results-grid">
+            <article class="result-card">
             <div class="card-header header-yellow">SUMMARY</div>
             <div id="summaryCard" class="card-body"></div>
           </article>
@@ -107,41 +121,29 @@
           </article>
         </div>
 
-        <div class="results-actions">
-          <button id="openChatBtn" class="brutal-button chat-launch-button" type="button">
-            EXPLORE THIS DOCUMENT ->
-          </button>
-        </div>
         <section id="recommendedQuestionsSection" class="recommended-questions hidden" aria-label="Recommended questions">
           <p class="recommended-title">Suggested questions</p>
           <div id="recommendedQuestions" class="recommended-list"></div>
         </section>
-      </section>
-    </main>
 
-    <section id="chatOverlay" class="chat-overlay hidden" aria-hidden="true">
-      <div class="chat-shell">
-        <div class="chat-topbar">
-          <div class="chat-logo">
-            <span class="logo-red">R</span><span class="logo-blue">E</span><span class="logo-yellow">A</span><span class="logo-green">D</span><span class="logo-red">R</span>
+        <div class="chat-inline">
+          <div class="chat-section-header">
+            <span class="chat-title">EXPLORE DOCUMENT</span>
           </div>
-          <div id="chatFilename" class="chat-filename"></div>
-          <button id="closeChatBtn" class="chat-close" type="button">X CLOSE</button>
+          <div id="chatMessages" class="chat-messages"></div>
+          <form id="chatForm" class="chat-form">
+            <input
+              id="chatInput"
+              type="text"
+              autocomplete="off"
+              placeholder="ASK FOR DETAILS, SUMMARY, OR INSIGHTS..."
+            />
+            <button id="sendBtn" type="submit">SEND -></button>
+          </form>
         </div>
-
-        <div id="chatMessages" class="chat-messages"></div>
-
-        <form id="chatForm" class="chat-form">
-          <input
-            id="chatInput"
-            type="text"
-            autocomplete="off"
-            placeholder="ASK FOR DETAILS, SUMMARY, OR INSIGHTS..."
-          />
-          <button id="sendBtn" type="submit">SEND -></button>
-        </form>
-      </div>
-    </section>
+          </div>
+       </section>
+    </main>
 
     <script src="app.js"></script>
   </body>

@@ -11,7 +11,6 @@ const errorBox = document.getElementById("errorBox");
 const uploadScreen = document.getElementById("uploadScreen");
 const resultsScreen = document.getElementById("resultsScreen");
 const newDocumentBtn = document.getElementById("newDocumentBtn");
-const openChatBtn = document.getElementById("openChatBtn");
 const recommendedQuestionsSection = document.getElementById("recommendedQuestionsSection");
 const recommendedQuestions = document.getElementById("recommendedQuestions");
 const summaryCard = document.getElementById("summaryCard");
@@ -20,12 +19,15 @@ const namesTags = document.getElementById("namesTags");
 const orgsTags = document.getElementById("orgsTags");
 const datesTags = document.getElementById("datesTags");
 const valuesTags = document.getElementById("valuesTags");
-const chatOverlay = document.getElementById("chatOverlay");
 const chatMessages = document.getElementById("chatMessages");
 const chatForm = document.getElementById("chatForm");
 const chatInput = document.getElementById("chatInput");
-const chatFilename = document.getElementById("chatFilename");
-const closeChatBtn = document.getElementById("closeChatBtn");
+const docTitle = document.getElementById("docTitle");
+const docFrame = document.getElementById("docFrame");
+const docPreview = document.getElementById("docPreview");
+const docViewer = document.getElementById("docViewer");
+const closeDocBtn = document.getElementById("closeDocBtn");
+const rightPanel = document.querySelector(".right-panel");
 
 let selectedFile = null;
 let currentDocId = "";
@@ -183,7 +185,7 @@ function renderRecommendedQuestions(items) {
     button.className = "recommended-question";
     button.textContent = question;
     button.addEventListener("click", async () => {
-      await openChatOverlay(question);
+      await askQuestion(question);
     });
     recommendedQuestions.appendChild(button);
   });
@@ -201,10 +203,39 @@ function renderResults(data) {
   renderRecommendedQuestions(data.recommended_questions);
 }
 
+function displayDocument(file) {
+  if (!file) return;
+  
+  const filename = file.name.toLowerCase();
+  docTitle.textContent = file.name;
+  
+  if (filename.endsWith('.pdf')) {
+    const url = URL.createObjectURL(file);
+    docFrame.src = url;
+    docPreview.classList.add("hidden");
+    docFrame.classList.remove("hidden");
+  } else if (filename.endsWith('.txt')) {
+    file.text().then(content => {
+      docPreview.textContent = content;
+      docPreview.classList.remove("hidden");
+      docFrame.classList.add("hidden");
+    }).catch(() => {
+      docPreview.textContent = "Error reading file";
+      docPreview.classList.remove("hidden");
+    });
+  }
+}
+
+function toggleDocumentViewer() {
+  docViewer.classList.toggle("hidden");
+}
+
 function showResults() {
   uploadScreen.classList.add("hidden");
   resultsScreen.classList.remove("hidden");
   newDocumentBtn.classList.remove("hidden");
+  displayDocument(selectedFile);
+  initializeInlineChat();
 }
 
 function resetAppState() {
@@ -219,7 +250,6 @@ function resetAppState() {
   uploadScreen.classList.remove("hidden");
   resultsScreen.classList.add("hidden");
   newDocumentBtn.classList.add("hidden");
-  closeChatOverlay();
   clearChatMessages();
   currentRecommendedQuestions = [];
   recommendedQuestions.innerHTML = "";
@@ -391,28 +421,15 @@ async function askQuestion(question) {
   }
 }
 
-async function openChatOverlay(initialQuestion = "") {
+async function initializeInlineChat() {
   clearError();
   await clearChatSession();
   clearChatMessages();
-  chatFilename.textContent = currentFilename || "DOCUMENT";
-  chatOverlay.classList.remove("hidden");
-  chatOverlay.setAttribute("aria-hidden", "false");
   appendMessage(
     "assistant",
     `READR here. I can summarize, extract details, and surface insights from this document. Current model: ${getSelectedModel() || "default"}. Ask me anything.`,
   );
-  if (initialQuestion) {
-    await askQuestion(initialQuestion);
-    return;
-  }
-
   chatInput.focus();
-}
-
-function closeChatOverlay() {
-  chatOverlay.classList.add("hidden");
-  chatOverlay.setAttribute("aria-hidden", "true");
 }
 
 async function submitQuestion(event) {
@@ -462,10 +479,7 @@ dropZone.addEventListener("drop", (event) => {
 
 processBtn.addEventListener("click", processDocument);
 newDocumentBtn.addEventListener("click", resetAppState);
-openChatBtn.addEventListener("click", () => {
-  openChatOverlay();
-});
-closeChatBtn.addEventListener("click", closeChatOverlay);
+closeDocBtn.addEventListener("click", toggleDocumentViewer);
 chatForm.addEventListener("submit", submitQuestion);
 modelSelect.addEventListener("change", () => {
   currentModelName = modelSelect.value;
