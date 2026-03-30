@@ -239,6 +239,24 @@ def split_large_paragraph(paragraph: str, max_size: int, overlap: int) -> list[s
     return chunks
 
 
+def embed_texts(texts: list[str]) -> list[list[float]]:
+    if not texts:
+        return []
+    try:
+        response = ollama.embed(model=EMBED_MODEL, input=texts)
+    except Exception as exc:  # pragma: no cover - depends on local Ollama availability
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Failed to generate embeddings with nomic-embed-text. "
+                "Make sure Ollama is running and the model is installed."
+            ),
+        ) from exc
+    embeddings = response.get("embeddings", [])
+    if len(embeddings) != len(texts):
+        raise HTTPException(status_code=500, detail="Embedding model returned invalid vectors.")
+    return embeddings
+
 def semantic_chunk(text: str, max_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
     normalized = normalize_whitespace(text)
     paragraphs = [part.strip() for part in normalized.split("\n\n") if part.strip()]
@@ -273,23 +291,7 @@ def semantic_chunk(text: str, max_size: int = CHUNK_SIZE, overlap: int = CHUNK_O
     return chunks
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
-    if not texts:
-        return []
-    try:
-        response = ollama.embed(model=EMBED_MODEL, input=texts)
-    except Exception as exc:  # pragma: no cover - depends on local Ollama availability
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Failed to generate embeddings with nomic-embed-text. "
-                "Make sure Ollama is running and the model is installed."
-            ),
-        ) from exc
-    embeddings = response.get("embeddings", [])
-    if len(embeddings) != len(texts):
-        raise HTTPException(status_code=500, detail="Embedding model returned invalid vectors.")
-    return embeddings
+
 
 
 def embed_text(text: str) -> list[float]:
@@ -297,7 +299,7 @@ def embed_text(text: str) -> list[float]:
     return embeddings[0] if embeddings else []
 
 
-def call_ollama_json(document_text: str, model_name: str) -> dict[str, Any]:
+def call_ollama_json(document_text: str, model_name: str, filename: str = "") -> dict[str, Any]:
     prompt = f"""
 Analyze the document below and return valid JSON with exactly this structure:
 {{
@@ -343,6 +345,8 @@ Rules for Recommended Questions:
 - If the document is very small or limited, ask simple fact-based questions that can still be answered from the text.
 - Return the questions in `recommended_questions` only.
 
+Document filename:
+{filename or "Unknown"}
 
 Document:
 {document_text[:SUMMARY_CONTEXT_CHARS]}
@@ -735,7 +739,10 @@ async def upload_document(
 
     doc_id = str(uuid4())
     store_document(doc_id, chunks)
-    analysis = merge_analysis_with_fallback(call_ollama_json(document_text, selected_model), document_text)
+    analysis = merge_analysis_with_fallback(
+        call_ollama_json(document_text, selected_model, file.filename),
+        document_text,
+    )
 
     entities = analysis.get("entities", {})
     return {
