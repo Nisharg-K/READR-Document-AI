@@ -944,6 +944,7 @@ async def upload_document(
         "word_count": len(document_text.split()),
         "chunk_count": len(chunks),
         "model_name": selected_model,
+        "ocr_method": ocr_method,
     }
 
 
@@ -1079,9 +1080,11 @@ async def get_models() -> dict[str, Any]:
             "auto": True,
         },
         "gpu_info": {
+            "gpu_available": gpu_available,
+            "gpu_name": gpu_name,
+            "gpu_vram": f"{round(gpu_memory, 2) if gpu_memory else 0} GB",
             "cuda_available": gpu_available,
             "cuda_version": torch.version.cuda if gpu_available else None,
-            "gpu_name": gpu_name,
             "gpu_memory_gb": round(gpu_memory, 2) if gpu_memory else None,
             "pytorch_version": torch.__version__,
         },
