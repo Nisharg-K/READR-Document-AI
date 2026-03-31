@@ -5,6 +5,7 @@ import json
 import os
 import re
 import socket
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -13,12 +14,24 @@ from uuid import uuid4
 
 import chromadb
 import fitz
+import numpy as np
 import ollama
+import torch
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+# Try to import GPU OCR processor
+try:
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent / "test"))
+    from ocrmode import GPUOCRProcessor
+    GPU_OCR_AVAILABLE = True
+except ImportError:
+    GPU_OCR_AVAILABLE = False
+    GPUOCRProcessor = None
 
 
 MODEL_NAME = "llama3.1:8b-instruct-q4_K_M"
@@ -46,6 +59,23 @@ ALLOWED_ORIGINS = [
     for origin in os.getenv("READR_ALLOWED_ORIGINS", "*").split(",")
     if origin.strip()
 ]
+
+# GPU OCR Configuration
+USE_GPU_OCR = os.getenv("READR_USE_GPU_OCR", "true").lower() in {"true", "1", "yes"}
+GPU_OCR_LANGUAGES = os.getenv("READR_GPU_OCR_LANGUAGES", "en").split(",")
+GPU_OCR_PROCESSOR = None
+
+if GPU_OCR_AVAILABLE and USE_GPU_OCR:
+    try:
+        print("Initializing GPU OCR processor...")
+        GPU_OCR_PROCESSOR = GPUOCRProcessor(
+            languages=[lang.strip() for lang in GPU_OCR_LANGUAGES],
+            use_gpu=torch.cuda.is_available()
+        )
+        print("✓ GPU OCR processor initialized")
+    except Exception as e:
+        print(f"⚠ Failed to initialize GPU OCR: {e}")
+        GPU_OCR_PROCESSOR = None
 
 CHAT_HISTORY: dict[str, list[dict[str, str]]] = {}
 CONNECTED_DEVICES: dict[str, dict[str, str]] = {}
@@ -263,7 +293,107 @@ def extract_text_from_scanned_pdf(file_bytes: bytes) -> str:
     return "\n\n".join(page_texts).strip()
 
 
-def extract_text(filename: str, file_bytes: bytes) -> str:
+def extract_text_from_scanned_pdf_gpu(file_bytes: bytes, zoom: float = 1.5) -> str:
+    """
+    Extract text from scanned PDF using GPU-accelerated OCR (CUDA).
+    Falls back gracefully if GPU OCR is not available.
+    """
+    if not GPU_OCR_PROCESSOR:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "GPU OCR is not available. Installing easyocr with GPU support is required. "
+                "Use: pip install easyocr torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121"
+            ),
+        )
+
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            tmp_file.write(file_bytes)
+            tmp_path = tmp_file.name
+
+        result = GPU_OCR_PROCESSOR.ocr_pdf(tmp_path, zoom=zoom)
+        Path(tmp_path).unlink()  # Clean up temp file
+
+        return result.get("text", "").strip()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"GPU OCR processing failed: {str(e)}",
+        ) from e
+
+
+def extract_text_from_scanned_pdf_ollama(file_bytes: bytes) -> str:
+    """Extract text from scanned PDF using Ollama VLM."""
+    try:
+        with fitz.open(stream=file_bytes, filetype="pdf") as document:
+            page_texts: list[str] = []
+            for page_number, page in enumerate(document, start=1):
+                image_bytes = render_pdf_page_as_png(page)
+                response = ollama.chat(
+                    model=OCR_MODEL,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are an OCR engine. Extract all readable text from the page image. "
+                                "Return plain text only. Preserve line breaks when helpful. "
+                                "Do not summarize, explain, or add commentary."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": "Extract the document text from this page image.",
+                            "images": [image_bytes],
+                        },
+                    ],
+                    options=OCR_OPTIONS,
+                    keep_alive=MODEL_KEEP_ALIVE,
+                )
+                page_text = response.get("message", {}).get("content", "").strip()
+                if page_text:
+                    page_texts.append(f"--- Page {page_number} ---\n{page_text}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Failed to OCR scanned PDF with {OCR_MODEL}. "
+                "Make sure Ollama is running and the vision model is installed."
+            ),
+        ) from exc
+
+    return "\n\n".join(page_texts).strip()
+
+
+def extract_text_from_scanned_pdf(file_bytes: bytes, ocr_method: str = "gpu") -> str:
+    """
+    Extract text from scanned PDF using specified OCR method.
+    
+    Args:
+        file_bytes: PDF file content as bytes
+        ocr_method: "gpu" for GPU OCR (CUDA), "ollama" for Ollama VLM, or "auto" for automatic selection
+    """
+    if ocr_method == "auto":
+        # Auto-select: Use GPU OCR if available, fallback to Ollama
+        if GPU_OCR_PROCESSOR:
+            ocr_method = "gpu"
+        else:
+            ocr_method = "ollama"
+
+    if ocr_method == "gpu":
+        return extract_text_from_scanned_pdf_gpu(file_bytes)
+    elif ocr_method == "ollama":
+        return extract_text_from_scanned_pdf_ollama(file_bytes)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid OCR method: {ocr_method}. Use 'gpu', 'ollama', or 'auto'.",
+        )
+
+
+def extract_text(filename: str, file_bytes: bytes, ocr_method: str = "auto") -> str:
     suffix = Path(filename).suffix.lower()
     if suffix == ".txt":
         try:
@@ -278,7 +408,7 @@ def extract_text(filename: str, file_bytes: bytes) -> str:
     if len(text) >= MIN_EXTRACTED_TEXT_LENGTH:
         return text
 
-    ocr_text = extract_text_from_scanned_pdf(file_bytes)
+    ocr_text = extract_text_from_scanned_pdf(file_bytes, ocr_method=ocr_method)
     if len(ocr_text) < MIN_EXTRACTED_TEXT_LENGTH:
         raise HTTPException(
             status_code=400,
@@ -774,13 +904,14 @@ def retrieve_context(doc_id: str, question: str) -> str:
 async def upload_document(
     file: UploadFile = File(...),
     model_name: str | None = Form(default=None),
+    ocr_method: str = Form(default="auto"),
 ) -> dict[str, Any]:
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing file name.")
 
     selected_model = resolve_chat_model(model_name)
     file_bytes = await file.read()
-    document_text = extract_text(file.filename, file_bytes)
+    document_text = extract_text(file.filename, file_bytes, ocr_method=ocr_method)
     if not document_text:
         raise HTTPException(status_code=400, detail="The uploaded document is empty.")
 
@@ -842,6 +973,59 @@ async def query_document(payload: QueryRequest) -> dict[str, Any]:
     return {"answer": answer, "session_id": payload.session_id, "device_id": payload.device_id or ""}
 
 
+@app.post("/ocr")
+async def ocr_document(
+    file: UploadFile = File(...),
+    ocr_method: str = Form(default="auto"),
+) -> dict[str, Any]:
+    """
+    Perform OCR on a PDF file.
+    
+    Args:
+        file: PDF file to process
+        ocr_method: OCR method to use - "gpu" (CUDA), "ollama" (VLM), or "auto" (automatic selection)
+    
+    Returns:
+        Extracted text and OCR statistics
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing file name.")
+
+    if not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported for OCR.")
+
+    if ocr_method not in {"gpu", "ollama", "auto"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid ocr_method. Use 'gpu', 'ollama', or 'auto'.",
+        )
+
+    file_bytes = await file.read()
+    
+    try:
+        text = extract_text_from_scanned_pdf(file_bytes, ocr_method=ocr_method)
+        
+        # Determine which method was actually used
+        used_method = ocr_method
+        if ocr_method == "auto":
+            used_method = "gpu" if GPU_OCR_PROCESSOR else "ollama"
+        
+        return {
+            "filename": file.filename,
+            "text": text,
+            "text_length": len(text),
+            "ocr_method": used_method,
+            "gpu_available": GPU_OCR_PROCESSOR is not None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"OCR processing failed: {str(e)}",
+        ) from e
+
+
 @app.post("/new-chat")
 async def new_chat(payload: NewChatRequest | None = None) -> dict[str, Any]:
     session_id = payload.session_id if payload else "default"
@@ -879,10 +1063,28 @@ async def health() -> dict[str, str]:
 @app.get("/models")
 async def get_models() -> dict[str, Any]:
     models = list_local_chat_models()
+    
+    # GPU info
+    gpu_available = torch.cuda.is_available()
+    gpu_name = torch.cuda.get_device_name(0) if gpu_available else None
+    gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1e9 if gpu_available else None
+    
     return {
         "models": models,
         "default_model": resolve_chat_model(None),
         "ocr_model": OCR_MODEL,
+        "ocr_methods": {
+            "gpu": GPU_OCR_PROCESSOR is not None,
+            "ollama": True,
+            "auto": True,
+        },
+        "gpu_info": {
+            "cuda_available": gpu_available,
+            "cuda_version": torch.version.cuda if gpu_available else None,
+            "gpu_name": gpu_name,
+            "gpu_memory_gb": round(gpu_memory, 2) if gpu_memory else None,
+            "pytorch_version": torch.__version__,
+        },
     }
 
 

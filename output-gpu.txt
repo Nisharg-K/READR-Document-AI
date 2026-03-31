@@ -1,0 +1,33 @@
+GPU-Accelerated OCR Test
+Page 1
+This is a test document for GPU-accelerated optical character recognition (OCR):
+NVIDIA CUDA Processing:
+RTX 500 Ada with 4.29 GB VRAM
+CUDA Version: 12.1
+PyTorch: 2.5.1+cu121
+EasyOCR with GPU support
+Lorem ipsum dolor sit amet; consectetur adipiscing elit_
+Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua:
+GPU Processing Features:
+Fast text extraction from PDFs
+Optimal VRAM utilization
+Real-time performance monitoring
+Support for multiple languages
+
+--- PAGE BREAK ---
+
+GPU-Accelerated OCR Test
+Page 2
+This is a test document for GPU-accelerated optical character recognition (OCR):
+NVIDIA CUDA Processing:
+RTX 500 Ada with 4.29 GB VRAM
+CUDA Version: 12.1
+PyTorch: 2.5.1+cu121
+EasyOCR with GPU support
+Lorem ipsum dolor sit amet; consectetur adipiscing elit_
+Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua:
+GPU Processing Features:
+Fast text extraction from PDFs
+Optimal VRAM utilization
+Real-time performance monitoring
+Support for multiple languages
