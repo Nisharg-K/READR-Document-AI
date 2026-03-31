@@ -5,6 +5,20 @@ pymupdf
 python-multipart
 chromadb
 rank_bm25
+
+# GPU-Accelerated OCR Dependencies
+easyocr>=1.7.0
+torch>=2.0.0
+torchvision>=0.15.0
+opencv-python>=4.8.0
+pillow>=10.0.0
+numpy>=1.24.0
+
+# Optional: CUDA utilities (install separately based on your CUDA version)
+# For CUDA 11.8: torch with cu118
+# For CUDA 12.1: torch with cu121
+# See: https://pytorch.org/get-started/locally/
+
 langchain
 langchain-ollama
 langchain-community
