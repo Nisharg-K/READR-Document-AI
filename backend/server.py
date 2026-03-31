@@ -297,7 +297,7 @@ def embed_text(text: str) -> list[float]:
     return embeddings[0] if embeddings else []
 
 
-def call_ollama_json(document_text: str, model_name: str) -> dict[str, Any]:
+def call_ollama_json(document_text: str, model_name: str, filename: str = "") -> dict[str, Any]:
     prompt = f"""
 Analyze the document below and return valid JSON with exactly this structure:
 {{
@@ -343,6 +343,8 @@ Rules for Recommended Questions:
 - If the document is very small or limited, ask simple fact-based questions that can still be answered from the text.
 - Return the questions in `recommended_questions` only.
 
+Document filename:
+{filename or "Unknown"}
 
 Document:
 {document_text[:SUMMARY_CONTEXT_CHARS]}
@@ -714,7 +716,10 @@ async def upload_document(
 
     doc_id = str(uuid4())
     store_document(doc_id, chunks)
-    analysis = merge_analysis_with_fallback(call_ollama_json(document_text, selected_model), document_text)
+    analysis = merge_analysis_with_fallback(
+        call_ollama_json(document_text, selected_model, file.filename),
+        document_text,
+    )
 
     entities = analysis.get("entities", {})
     return {
