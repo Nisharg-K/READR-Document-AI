@@ -5,6 +5,8 @@ const dropZone = document.getElementById("dropZone");
 const fileName = document.getElementById("fileName");
 const modelSelect = document.getElementById("modelSelect");
 const modelStatus = document.getElementById("modelStatus");
+const ocrMethodSelect = document.getElementById("ocrMethodSelect");
+const gpuStatus = document.getElementById("gpuStatus");
 const processBtn = document.getElementById("processBtn");
 const processingSteps = document.getElementById("processingSteps");
 const errorBox = document.getElementById("errorBox");
@@ -33,6 +35,7 @@ let selectedFile = null;
 let currentDocId = "";
 let currentFilename = "";
 let currentModelName = "";
+let currentOCRMethod = "";
 let typingIndicator = null;
 let currentRecommendedQuestions = [];
 
@@ -56,6 +59,10 @@ function setModelStatus(message) {
 
 function getSelectedModel() {
   return modelSelect.value || currentModelName;
+}
+
+function getSelectedOCRMethod() {
+  return ocrMethodSelect.value || "auto";
 }
 
 function populateModelOptions(models, defaultModel) {
@@ -102,6 +109,20 @@ async function loadModels() {
     }
 
     populateModelOptions(data.models, data.default_model);
+    
+    // Display GPU status if available
+    if (data.gpu_info) {
+      const gpuInfo = data.gpu_info;
+      if (gpuInfo.gpu_available) {
+        gpuStatus.textContent = `✓ GPU Available: ${gpuInfo.gpu_name} (${gpuInfo.gpu_vram})`;
+        gpuStatus.style.color = "#4CAF50";
+      } else {
+        gpuStatus.textContent = "GPU Not Available - Using CPU for OCR";
+        gpuStatus.style.color = "#FFA500";
+      }
+    } else {
+      gpuStatus.textContent = "GPU status unknown";
+    }
   } catch (error) {
     modelSelect.innerHTML = "";
     const option = document.createElement("option");
@@ -194,7 +215,19 @@ function renderRecommendedQuestions(items) {
 }
 
 function renderResults(data) {
-  summaryCard.textContent = data.summary || "No summary returned.";
+  let summary = data.summary || "No summary returned.";
+  
+  // Add OCR method information to the summary
+  if (currentOCRMethod) {
+    const ocrMethodDisplayName = {
+      "gpu": "GPU (Fast)",
+      "ollama": "Ollama VLM (Contextual)",
+      "auto": "Auto (Smart)"
+    }[currentOCRMethod];
+    summary = `[OCR Method: ${ocrMethodDisplayName}]\n\n${summary}`;
+  }
+  
+  summaryCard.textContent = summary;
   renderTags(namesTags, data.entities?.names);
   renderTags(orgsTags, data.entities?.organisations);
   renderTags(datesTags, data.entities?.dates);
@@ -279,6 +312,7 @@ async function processDocument() {
   const formData = new FormData();
   formData.append("file", selectedFile);
   formData.append("model_name", getSelectedModel());
+  formData.append("ocr_method", getSelectedOCRMethod());
 
   processBtn.disabled = true;
   processBtn.textContent = "PROCESSING...";
@@ -300,6 +334,7 @@ async function processDocument() {
     finishSteps();
     currentDocId = data.doc_id || "";
     currentModelName = data.model_name || getSelectedModel();
+    currentOCRMethod = data.ocr_method || getSelectedOCRMethod();
     if (currentModelName) {
       modelSelect.value = currentModelName;
       setModelStatus(`Using local model: ${currentModelName}`);

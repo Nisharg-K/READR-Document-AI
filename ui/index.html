@@ -58,6 +58,14 @@
             <option value="">LOADING LOCAL MODELS...</option>
           </select>
           <p id="modelStatus" class="model-status">Checking Ollama for available local models...</p>
+          
+          <label class="model-label" for="ocrMethodSelect">OCR METHOD</label>
+          <select id="ocrMethodSelect" class="model-select">
+            <option value="auto">AUTO (Smart - GPU preferred)</option>
+            <option value="gpu">GPU (Fast)</option>
+            <option value="ollama">OLLAMA (Contextual)</option>
+          </select>
+          <p id="gpuStatus" class="model-status">GPU status will be shown here...</p>
         </section>
         <button id="processBtn" class="brutal-button process-button" type="button">
           PROCESS DOCUMENT
